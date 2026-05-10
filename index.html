@@ -399,13 +399,34 @@ function badgeStatus(s){
   return `<span class="badge b-mut">${escHtml(s)}</span>`;
 }
 
-// JSONP fetch
+// API fetch via Vercel proxy
 async function fetchApi(action, extra){
-  ...
-}
+  const query = new URLSearchParams({
+    mode: 'api',
+    action: action,
+    ...(extra || {})
+  });
 
-function setHeaderDate(){
-  ...
+  const url = `/api/gas?${query.toString()}`;
+  console.info('[Logbook PnD] Request via Vercel proxy:', url);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    cache: 'no-store',
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Proxy error ${response.status}: ${text}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('[Logbook PnD] Response bukan JSON:', text);
+    throw new Error('Response server bukan JSON valid.');
+  }
 }
 
 function setHeaderDate(){
