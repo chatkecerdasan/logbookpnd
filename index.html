@@ -316,10 +316,16 @@
 //  KONFIGURASI FRONTEND
 // ============================================================
 const API_URL = 'https://script.google.com/macros/s/AKfycbwW9bzIFhEiNAcJIXWyQMsanDi81oBe1eRsJku5tpKNQfgMv6oAvw77dQV4G-Vl9PGyxw/exec';
+// Endpoint Apps Script v5 aktif untuk dashboard Vercel.
 //
 //  PENTING: setelah deploy Code_v5.js sebagai versi baru, ganti URL di atas
 //  dengan URL deploy v5 (URL lama akan tetap mengarah ke v4).
 //
+
+function debugApiUrl(){
+  console.info('[Logbook PnD] API_URL aktif:', API_URL);
+  return API_URL;
+}
 
 // state
 const state = {
@@ -396,17 +402,45 @@ function badgeStatus(s){
 // JSONP fetch
 function fetchApi(action, extra){
   return new Promise((resolve, reject) => {
-    const cbName = 'cb_' + Math.random().toString(36).slice(2,10);
-    const params = Object.entries(extra || {}).filter(([_,v]) => v !== '' && v != null)
-      .map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
-    const url = `${API_URL}?mode=api&action=${action}&callback=${cbName}${params ? '&' + params : ''}`;
-    const s = document.createElement('script');
-    let timer = setTimeout(() => { cleanup(); reject(new Error('Timeout')); }, 25000);
-    function cleanup(){ delete window[cbName]; s.remove(); clearTimeout(timer); }
-    window[cbName] = (data) => { cleanup(); resolve(data); };
-    s.onerror = () => { cleanup(); reject(new Error('Network error')); };
-    s.src = url;
-    document.body.appendChild(s);
+    const cbName = 'lb_cb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    const query = new URLSearchParams({
+      mode: 'api',
+      action: action,
+      callback: cbName,
+      ...(extra || {})
+    });
+    const url = `${API_URL}?${query.toString()}`;
+    console.info('[Logbook PnD] Request:', url);
+
+    const script = document.createElement('script');
+    let done = false;
+
+    const cleanup = () => {
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
+      clearTimeout(timer);
+    };
+
+    const fail = (message) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error(`${message}. Endpoint: ${API_URL}`));
+    };
+
+    const timer = setTimeout(() => fail('Timeout koneksi ke Apps Script'), 25000);
+
+    window[cbName] = (data) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(data || {});
+    };
+
+    script.onerror = () => fail('Gagal memuat endpoint Apps Script');
+    script.async = true;
+    script.src = url;
+    document.body.appendChild(script);
   });
 }
 
@@ -423,29 +457,48 @@ async function doLogin(){
   const inp = $('#pin-input');
   const btn = $('#btn-login');
   const err = $('#login-err');
-  const pin = inp.value.trim();
+  const pin = String(inp.value || '').trim();
+
   err.textContent = '';
   inp.classList.remove('error');
+
   if (!/^\d{6}$/.test(pin)) {
     err.textContent = 'PIN harus 6 digit angka.';
     inp.classList.add('error');
+    inp.focus();
     return;
   }
-  btn.disabled = true; btn.textContent = 'Memverifikasi…';
+
+  btn.disabled = true;
+  btn.textContent = 'Memverifikasi…';
+
   try {
     const res = await fetchApi('auth_pin', { pin });
-    if (!res.ok) {
-      err.textContent = res.error || 'PIN salah.';
+
+    if (!res || res.ok !== true) {
+      err.textContent = (res && res.error) ? res.error : 'PIN tidak dikenali.';
       inp.classList.add('error');
-      btn.disabled = false; btn.textContent = 'Masuk';
+      inp.focus();
       return;
     }
+
+    if (!res.user || !res.user.role) {
+      err.textContent = 'Login berhasil, tetapi data user dari server tidak lengkap.';
+      inp.classList.add('error');
+      return;
+    }
+
     state.user = res.user;
     sessionStorage.setItem('lb_user', JSON.stringify(res.user));
     initApp();
   } catch (e) {
-    err.textContent = 'Tidak bisa terhubung ke server. Coba lagi.';
-    btn.disabled = false; btn.textContent = 'Masuk';
+    console.error('Login error:', e);
+    err.textContent = 'Tidak bisa terhubung ke server. Cek Console/Network: endpoint Apps Script harus aktif, akses = Anyone, dan response callback JSONP harus muncul.';
+    inp.classList.add('error');
+    inp.focus();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Masuk';
   }
 }
 
