@@ -400,48 +400,12 @@ function badgeStatus(s){
 }
 
 // JSONP fetch
-function fetchApi(action, extra){
-  return new Promise((resolve, reject) => {
-    const cbName = 'lb_cb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-    const query = new URLSearchParams({
-      mode: 'api',
-      action: action,
-      callback: cbName,
-      ...(extra || {})
-    });
-    const url = `${API_URL}?${query.toString()}`;
-    console.info('[Logbook PnD] Request:', url);
+async function fetchApi(action, extra){
+  ...
+}
 
-    const script = document.createElement('script');
-    let done = false;
-
-    const cleanup = () => {
-      if (script.parentNode) script.parentNode.removeChild(script);
-      try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
-      clearTimeout(timer);
-    };
-
-    const fail = (message) => {
-      if (done) return;
-      done = true;
-      cleanup();
-      reject(new Error(`${message}. Endpoint: ${API_URL}`));
-    };
-
-    const timer = setTimeout(() => fail('Timeout koneksi ke Apps Script'), 25000);
-
-    window[cbName] = (data) => {
-      if (done) return;
-      done = true;
-      cleanup();
-      resolve(data || {});
-    };
-
-    script.onerror = () => fail('Gagal memuat endpoint Apps Script');
-    script.async = true;
-    script.src = url;
-    document.body.appendChild(script);
-  });
+function setHeaderDate(){
+  ...
 }
 
 function setHeaderDate(){
