@@ -576,6 +576,65 @@ function renderHariIni(data){
   const u = state.user;
   const role = (u.role || '').toLowerCase();
 
+// Jika hari ini bukan hari kerja / tidak wajib submit,
+  // dashboard cukup menampilkan informasi libur/non-kerja.
+  // Tidak menampilkan status Tidak Submit.
+  if (data.hariKerja && data.hariKerja.wajibSubmit === false) {
+    const hk = data.hariKerja;
+    const jenis = hk.jenisHari || 'BUKAN_HARI_KERJA';
+    const ket = hk.keterangan || 'Tidak ada kewajiban submit logbook';
+    const sumber = hk.sumber || hk.source || 'Kalender Kerja';
+
+    $('#main-content').innerHTML = `
+      <div class="alert alert-info">
+        Hari ini bukan hari kerja: <b>${escHtml(ket)}</b>.<br>
+        Tidak ada kewajiban submit logbook.
+      </div>
+
+      <div class="cards cards-3">
+        <div class="card" style="--card-accent:var(--navy-mid);">
+          <div class="card-label">Status Hari</div>
+          <div class="card-val" style="font-size:26px;">Libur</div>
+          <div class="card-sub">${escHtml(jenis)}</div>
+        </div>
+        <div class="card" style="--card-accent:var(--hijau-br);">
+          <div class="card-label">Kewajiban Submit</div>
+          <div class="card-val" style="font-size:26px;">Tidak Ada</div>
+          <div class="card-sub">Tidak dihitung sebagai tidak submit</div>
+        </div>
+        <div class="card" style="--card-accent:var(--gold);">
+          <div class="card-label">Sumber Kalender</div>
+          <div class="card-val" style="font-size:22px;">${escHtml(sumber)}</div>
+          <div class="card-sub">${escHtml(tglPanjang(data.tanggal))}</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Keterangan Kalender Kerja</div>
+            <div class="panel-sub">Tanggal ini tidak masuk perhitungan kepatuhan submit logbook.</div>
+          </div>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-item">
+            <div class="lbl">Tanggal</div>
+            <div class="val">${escHtml(tglPanjang(data.tanggal))}</div>
+          </div>
+          <div class="detail-item">
+            <div class="lbl">Jenis Hari</div>
+            <div class="val">${escHtml(jenis)}</div>
+          </div>
+          <div class="detail-item full">
+            <div class="lbl">Keterangan</div>
+            <div class="val">${escHtml(ket)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+ 
   // STAF: hanya lihat dirinya
   let personilTampil = data.personil;
   if (role === 'staf') {
