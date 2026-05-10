@@ -902,11 +902,36 @@ function renderDonut(distribusi, total){
 // ============================================================
 async function loadHistory(force){
   const f = state.filter;
-  const params = { start:f.start, end:f.end, bagian:f.bagian, q:f.q };
-  const key = 'history_' + JSON.stringify(params);
-  if (force || !state.cache[key]) state.cache[key] = await fetchApi('history', params);
+  const u = state.user;
+  const role = String(u.role || '').toLowerCase();
+
+  const params = {
+    start: f.start,
+    end: f.end,
+    q: f.q
+  };
+
+  // Role-based access:
+  // Staf hanya melihat data sendiri.
+  // Kabag dibatasi ke bagian sendiri.
+  // Kabiro bisa melihat semua, dengan filter bagian jika dipilih.
+  if (role === 'staf') {
+    params.email = u.email;
+  } else if (role === 'kabag') {
+    params.bagian = u.bagian;
+  } else {
+    if (f.bagian) params.bagian = f.bagian;
+  }
+
+  const key = 'history_raw_' + JSON.stringify(params);
+
+  if (force || !state.cache[key]) {
+    state.cache[key] = await fetchApi('raw_history', params);
+  }
+
   renderHistory(state.cache[key]);
 }
+``
 
 function renderHistory(data){
   const rows = (data && data.data) || [];
