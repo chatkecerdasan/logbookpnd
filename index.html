@@ -671,12 +671,16 @@ function renderHariIni(data){
 //  TAB: LOGBOOK SAYA (staf & kabag)
 // ============================================================
 async function loadLogbookSaya(force){
-  const key = 'logbook_saya_' + state.filter.start + '_' + state.filter.end;
+  const key = 'logbook_saya_' + state.filter.start + '_' + state.filter.end + '_' + state.user.email;
+
   if (force || !state.cache[key]) {
-    state.cache[key] = await fetchApi('history', {
-      start: state.filter.start, end: state.filter.end, q: state.user.nama.split(',')[0],
+    state.cache[key] = await fetchApi('raw_history', {
+      start: state.filter.start,
+      end: state.filter.end,
+      email: state.user.email
     });
   }
+
   renderLogbookSaya(state.cache[key]);
 }
 
