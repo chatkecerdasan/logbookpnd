@@ -336,8 +336,28 @@ const state = {
   filter: {              // global filter for beban/history
     start: '', end: '',
     bagian: '', q: '',
+    // v6 — toggle "Khusus WFH" (default ON: analisis fokus ke Jumat WFH).
+    // Saat OFF, dashboard menampilkan semua data historis (kompatibel dengan v5).
+    wfhOnly: (function(){
+      try { const v = sessionStorage.getItem('lb_wfhonly'); return v === null ? true : v === '1'; }
+      catch(_) { return true; }
+    })(),
   },
 };
+
+// v6 — Cari Jumat WFH terdekat (tanggal genap) sebagai fallback FE.
+// Untuk akurat (memperhitungkan override Kalender_Kerja), FE memanggil
+// endpoint hari_wajib_range; helper ini dipakai saat endpoint tidak tersedia.
+function nextJumatWfhFE(fromYmd){
+  const d = fromYmd ? new Date(fromYmd + 'T00:00:00') : new Date();
+  for (let i = 1; i <= 90; i++) {
+    d.setDate(d.getDate() + 1);
+    if (d.getDay() === 5 && d.getDate() % 2 === 0) {
+      return d.toISOString().slice(0,10);
+    }
+  }
+  return '';
+}
 
 // 7 kategori baku (sinkron dengan Apps Script)
 const KATEGORI = [
@@ -568,7 +588,24 @@ async function loadTab(tab, force){
 async function loadHariIni(force){
   const key = 'hari_ini';
   if (force || !state.cache[key]) state.cache[key] = await fetchApi('hari_ini');
-  renderHariIni(state.cache[key]);
+  // v6 — sekalian ambil jadwal logbook berikutnya kalau hari ini bukan hari logbook
+  const data = state.cache[key];
+  if (data && data.hariKerja && data.hariKerja.wajibSubmit === false) {
+    const nextKey = 'hari_ini_next';
+    if (force || !state.cache[nextKey]) {
+      const todayD = new Date();
+      const start = new Date(todayD); start.setDate(todayD.getDate() + 1);
+      const end   = new Date(todayD); end.setDate(todayD.getDate() + 60);
+      const fmt = d => d.toISOString().slice(0,10);
+      try {
+        state.cache[nextKey] = await fetchApi('hari_wajib_range', { start: fmt(start), end: fmt(end) });
+      } catch (e) {
+        state.cache[nextKey] = null;
+      }
+    }
+    data._nextWajib = state.cache[nextKey];
+  }
+  renderHariIni(data);
 }
 
 function renderHariIni(data){
@@ -576,35 +613,45 @@ function renderHariIni(data){
   const u = state.user;
   const role = (u.role || '').toLowerCase();
 
-// Jika hari ini bukan hari kerja / tidak wajib submit,
-  // dashboard cukup menampilkan informasi libur/non-kerja.
-  // Tidak menampilkan status Tidak Submit.
+// v6 — Jika hari ini bukan hari logbook (Jumat tanggal genap WFH),
+  // tampilkan info ringkas + jadwal logbook berikutnya (memperhitungkan override Kalender_Kerja).
   if (data.hariKerja && data.hariKerja.wajibSubmit === false) {
     const hk = data.hariKerja;
-    const jenis = hk.jenisHari || 'BUKAN_HARI_KERJA';
-    const ket = hk.keterangan || 'Tidak ada kewajiban submit logbook';
+    const jenis = hk.jenisHari || 'BUKAN_JADWAL_LOGBOOK';
+    const ket = hk.keterangan || 'Hari ini di luar jadwal logbook 2-mingguan';
     const sumber = hk.sumber || hk.source || 'Kalender Kerja';
+
+    // Ambil Jumat WFH terdekat dari endpoint (akurat), fallback ke heuristik FE.
+    let nextYmd = '';
+    let nextLabel = '';
+    if (data._nextWajib && Array.isArray(data._nextWajib.tanggal) && data._nextWajib.tanggal.length) {
+      nextYmd = data._nextWajib.tanggal[0];
+      const meta = (data._nextWajib.data || []).find(x => x.tanggal === nextYmd) || {};
+      nextLabel = meta.isOverride ? ' (override SDM via Kalender_Kerja)' : '';
+    } else {
+      nextYmd = nextJumatWfhFE(data.tanggal);
+    }
 
     $('#main-content').innerHTML = `
       <div class="alert alert-info">
-        Hari ini bukan hari kerja: <b>${escHtml(ket)}</b>.<br>
-        Tidak ada kewajiban submit logbook.
+        Hari ini <b>${escHtml(ket)}</b>. Tidak ada kewajiban logbook hari ini.
+        ${nextYmd ? `<br>Jadwal logbook berikutnya: <b>${escHtml(tglPanjang(nextYmd))}</b>${escHtml(nextLabel)}.` : ''}
       </div>
 
       <div class="cards cards-3">
         <div class="card" style="--card-accent:var(--navy-mid);">
-          <div class="card-label">Status Hari</div>
-          <div class="card-val" style="font-size:26px;">Libur</div>
+          <div class="card-label">Status Hari Ini</div>
+          <div class="card-val" style="font-size:22px;">Bukan Jadwal</div>
           <div class="card-sub">${escHtml(jenis)}</div>
         </div>
         <div class="card" style="--card-accent:var(--hijau-br);">
-          <div class="card-label">Kewajiban Submit</div>
-          <div class="card-val" style="font-size:26px;">Tidak Ada</div>
-          <div class="card-sub">Tidak dihitung sebagai tidak submit</div>
+          <div class="card-label">Logbook Berikutnya</div>
+          <div class="card-val" style="font-size:22px;">${nextYmd ? escHtml(tglPendek(nextYmd)) : '—'}</div>
+          <div class="card-sub">${nextYmd ? 'Wajib diisi pada hari tersebut' : 'Tidak ada jadwal dekat'}</div>
         </div>
         <div class="card" style="--card-accent:var(--gold);">
           <div class="card-label">Sumber Kalender</div>
-          <div class="card-val" style="font-size:22px;">${escHtml(sumber)}</div>
+          <div class="card-val" style="font-size:18px;">${escHtml(sumber)}</div>
           <div class="card-sub">${escHtml(tglPanjang(data.tanggal))}</div>
         </div>
       </div>
@@ -612,13 +659,13 @@ function renderHariIni(data){
       <div class="panel">
         <div class="panel-head">
           <div>
-            <div class="panel-title">Keterangan Kalender Kerja</div>
-            <div class="panel-sub">Tanggal ini tidak masuk perhitungan kepatuhan submit logbook.</div>
+            <div class="panel-title">Aturan Pengisian Logbook (v6)</div>
+            <div class="panel-sub">Logbook hanya diisi di hari kerja Jumat tanggal genap (saat WFH). Perubahan jadwal WFH/WFO dari Biro SDM dicatat di sheet Kalender_Kerja.</div>
           </div>
         </div>
         <div class="detail-grid">
           <div class="detail-item">
-            <div class="lbl">Tanggal</div>
+            <div class="lbl">Tanggal Sekarang</div>
             <div class="val">${escHtml(tglPanjang(data.tanggal))}</div>
           </div>
           <div class="detail-item">
@@ -730,13 +777,14 @@ function renderHariIni(data){
 //  TAB: LOGBOOK SAYA (staf & kabag)
 // ============================================================
 async function loadLogbookSaya(force){
-  const key = 'logbook_saya_' + state.filter.start + '_' + state.filter.end + '_' + state.user.email;
+  const key = 'logbook_saya_' + state.filter.start + '_' + state.filter.end + '_' + state.user.email + '_' + wfhParam();
 
   if (force || !state.cache[key]) {
     state.cache[key] = await fetchApi('raw_history', {
       start: state.filter.start,
       end: state.filter.end,
-      email: state.user.email
+      email: state.user.email,
+      wfhOnly: wfhParam(),
     });
   }
 
@@ -822,7 +870,7 @@ function renderLogbookSaya(data){
 // ============================================================
 async function loadBeban(force){
   const f = state.filter;
-  const params = { start:f.start, end:f.end, bagian:f.bagian };
+  const params = { start:f.start, end:f.end, bagian:f.bagian, wfhOnly: wfhParam() };
   if (state.user.role === 'staf') params.nama = state.user.nama.split(',')[0];
   const key = 'beban_' + JSON.stringify(params);
   if (force || !state.cache[key]) state.cache[key] = await fetchApi('beban_kerja', params);
@@ -843,10 +891,10 @@ function renderBeban(data){
       <div class="card-val">${r.jumlahPersonil}</div>
       <div class="card-sub">tercakup dalam analisis</div>
     </div>
-    <div class="card" style="--card-accent:var(--gold);">
+    <div class="card" style="--card-accent:var(--gold);" title="Hari logbook = Jumat tanggal genap saat WFH (atau hari yang ditetapkan via Kalender_Kerja).">
       <div class="card-label">Total Jam Efektif</div>
       <div class="card-val">${r.totalJamEfektif}</div>
-      <div class="card-sub">jam dalam ${data.hariKerja} hari kerja</div>
+      <div class="card-sub">jam dalam ${data.hariKerja} hari logbook</div>
     </div>
     <div class="card" style="--card-accent:var(--hijau-br);">
       <div class="card-label">Total Kegiatan</div>
@@ -898,7 +946,7 @@ function renderBeban(data){
     <div class="panel-head">
       <div>
         <div class="panel-title">Beban Per Personil</div>
-        <div class="panel-sub">Jam efektif & FTE utilization vs kapasitas ${data.hariKerja} hari × 7 jam = ${data.hariKerja*7} jam</div>
+        <div class="panel-sub">Jam efektif & FTE utilization vs kapasitas ${data.hariKerja} hari logbook × 7 jam = ${data.hariKerja*7} jam</div>
       </div>
     </div>
     <div class="table-wrap"><table>
@@ -933,8 +981,9 @@ function renderBeban(data){
   }
   html += `</tbody></table></div>
     <div style="margin-top:14px; font-size:11px; color:var(--teks-sub); line-height:1.6;">
-      <strong>Catatan:</strong> FTE Utilization = Jam Efektif ÷ (Hari Kerja × 7 jam). Untuk Staf, jam efektif dihitung dari (Jam Selesai − Jam Mulai − 1 jam istirahat).
-      Untuk Kabag/Kabiro yang form-nya tidak mencatat jam, dipakai default 7 jam per hari submit.
+      <strong>Catatan:</strong> FTE Utilization = Jam Efektif ÷ (Hari Logbook × 7 jam).
+      "Hari logbook" = jumlah Jumat tanggal genap (WFH) dalam periode, plus override yang dicatat di Kalender_Kerja saat ada pengumuman SDM yang menggeser jadwal WFH/WFO.
+      Untuk Staf, jam efektif dihitung dari (Jam Selesai − Jam Mulai − 1 jam istirahat). Untuk Kabag/Kabiro yang form-nya tidak mencatat jam, dipakai default 7 jam per hari submit.
     </div>
   </div>`;
 
@@ -967,7 +1016,8 @@ async function loadHistory(force){
   const params = {
     start: f.start,
     end: f.end,
-    q: f.q
+    q: f.q,
+    wfhOnly: wfhParam(),
   };
 
   // Role-based access:
@@ -1036,11 +1086,11 @@ function renderHistory(data){
 // ============================================================
 async function loadStatistik(force){
   const f = state.filter;
-  const key = 'statistik_' + f.start + '_' + f.end;
+  const key = 'statistik_' + f.start + '_' + f.end + '_' + wfhParam();
   if (force || !state.cache[key]) {
     state.cache[key] = {
-      stat: await fetchApi('statistik', { start:f.start, end:f.end }),
-      beban: await fetchApi('beban_kerja', { start:f.start, end:f.end }),
+      stat: await fetchApi('statistik', { start:f.start, end:f.end, wfhOnly: wfhParam() }),
+      beban: await fetchApi('beban_kerja', { start:f.start, end:f.end, wfhOnly: wfhParam() }),
     };
   }
   renderStatistik(state.cache[key]);
@@ -1089,7 +1139,7 @@ function renderStatistik(data){
         <div><div class="stat-mini">Tepat</div><div class="stat-mini-val">${s.submit}</div></div>
         <div><div class="stat-mini">Terlambat</div><div class="stat-mini-val">${s.terlambat}</div></div>
         <div><div class="stat-mini">Tidak Submit</div><div class="stat-mini-val">${s.tidakSubmit}</div></div>
-        <div><div class="stat-mini">Hari Kerja</div><div class="stat-mini-val">${s.total}</div></div>
+        <div title="Hari logbook = Jumat tanggal genap saat WFH (override SDM lewat Kalender_Kerja)."><div class="stat-mini">Hari Logbook</div><div class="stat-mini-val">${s.total}</div></div>
         <div><div class="stat-mini">Jam Efektif</div><div class="stat-mini-val">${b.jamEfektif != null ? Math.round(b.jamEfektif*10)/10 : '—'}</div></div>
         <div><div class="stat-mini">FTE Util</div><div class="stat-mini-val">${b.fteUtil != null ? b.fteUtil + '%' : '—'}</div></div>
       </div>
@@ -1106,8 +1156,8 @@ function renderStatistik(data){
 // ============================================================
 async function loadKendala(force){
   const f = state.filter;
-  const key = 'kendala_' + f.start + '_' + f.end;
-  if (force || !state.cache[key]) state.cache[key] = await fetchApi('kendala', { start:f.start, end:f.end });
+  const key = 'kendala_' + f.start + '_' + f.end + '_' + wfhParam();
+  if (force || !state.cache[key]) state.cache[key] = await fetchApi('kendala', { start:f.start, end:f.end, wfhOnly: wfhParam() });
   renderKendala(state.cache[key]);
 }
 
@@ -1196,7 +1246,7 @@ function renderToolbarRange(currentTab, withSearch, withBagian){
 
     <button class="btn btn-ghost" onclick="setRangePreset('bulan_ini', '${currentTab}')">Bulan ini</button>
     <button class="btn btn-ghost" onclick="setRangePreset('30_hari', '${currentTab}')">30 hari</button>
-    <button class="btn btn-ghost" onclick="setRangePreset('minggu_ini', '${currentTab}')">Minggu ini</button>
+    <button class="btn btn-ghost" onclick="setRangePreset('2_bulan', '${currentTab}')">2 bulan</button>
 
     ${withBagian && role !== 'staf' ? `
     <label style="margin-left:14px;">Bagian</label>
@@ -1211,6 +1261,12 @@ function renderToolbarRange(currentTab, withSearch, withBagian){
     <input type="search" placeholder="Cari nama…" value="${escHtml(f.q)}"
       oninput="state.filter.q=this.value;" onchange="loadTab('${currentTab}', true);">` : ''}
 
+    <label style="margin-left:14px;" title="Saat ON, analisis hanya menghitung baris berstatus WFH. Saat OFF, menampilkan semua data historis.">
+      <input type="checkbox" ${f.wfhOnly ? 'checked' : ''}
+        onchange="state.filter.wfhOnly=this.checked; try{sessionStorage.setItem('lb_wfhonly', this.checked?'1':'0')}catch(_){} state.cache={}; loadTab('${currentTab}', true);">
+      Khusus WFH
+    </label>
+
     <div class="spacer"></div>
     <button class="btn btn-outline" onclick="loadTab('${currentTab}', true)">↻ Refresh</button>
     <button class="btn btn-ghost" onclick="window.print()" title="Cetak / Simpan PDF">🖨 Cetak</button>
@@ -1224,6 +1280,10 @@ function setRangePreset(preset, tab){
   else if (preset === '30_hari') {
     const d = new Date(); d.setDate(d.getDate() - 29);
     s = d.toISOString().slice(0,10);
+  } else if (preset === '2_bulan') {
+    // v6 — preset 2 bulan terakhir (lebih bermakna untuk frekuensi 2-mingguan)
+    const d = new Date(); d.setDate(d.getDate() - 60);
+    s = d.toISOString().slice(0,10);
   } else if (preset === 'minggu_ini') {
     const d = new Date(); const wd = (d.getDay() + 6) % 7; // Senin = 0
     d.setDate(d.getDate() - wd);
@@ -1232,6 +1292,9 @@ function setRangePreset(preset, tab){
   state.filter.start = s; state.filter.end = e;
   loadTab(tab, true);
 }
+
+// v6 — helper: stringify wfhOnly utk param URL ('true'/''), backward compat untuk Apps Script lama.
+function wfhParam(){ return state.filter.wfhOnly ? 'true' : ''; }
 
 // ============================================================
 //  DETAIL VIEW
